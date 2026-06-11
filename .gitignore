@@ -1,0 +1,32 @@
+# Gradle
+.gradle/
+build/
+
+# Android build outputs
+app/build/
+*.apk
+*.aab
+*.ap_
+*.dex
+captures/
+.cxx/
+externalNativeBuild/
+
+# Kotlin compiler caches
+.kotlin/
+
+# Local machine settings
+local.properties
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+
+# Local Codex/session files
+.agents/
+.codex/
+
+# OS files
+.DS_Store
+Thumbs.db
