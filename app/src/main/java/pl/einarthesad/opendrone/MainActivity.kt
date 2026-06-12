@@ -1,6 +1,8 @@
 package pl.einarthesad.opendrone
 
+import android.app.AlertDialog
 import android.app.Activity
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.ConnectivityManager
@@ -14,10 +16,14 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.TextView
+import java.net.Inet4Address
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -26,6 +32,8 @@ class MainActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var recButton: Button
     private lateinit var shotButton: Button
+    private lateinit var setButton: Button
+    private lateinit var settings: AppSettings
 
     private var receiver: DroneVideoReceiver? = null
     private var recorder: RecorderController? = null
@@ -33,13 +41,18 @@ class MainActivity : Activity() {
     @Volatile
     private var latestJpeg: ByteArray? = null
 
+    @Volatile
+    private var latestBitmap: Bitmap? = null
+
     private val decoding = AtomicBoolean(false)
+    private val fallbackDroneIp = "192.168.4.153"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         keepScreenOn()
         bindToWifiIfPossible()
+        settings = AppSettings(this)
 
         buildUi()
         fullscreen()
@@ -53,10 +66,29 @@ class MainActivity : Activity() {
             }
         )
 
+        startReceiver()
+    }
+
+    private fun startReceiver() {
+        receiver?.stop()
+
+        val config = ConnectionConfig(
+            droneIp = detectDroneIp(),
+            localVideoPort = settings.localVideoPort,
+            droneVideoPort = settings.droneVideoPort
+        )
+
+        statusView.text = "Connecting ${config.droneIp}:${config.droneVideoPort}"
+
         receiver = DroneVideoReceiver(
+            config = config,
             onFrame = { jpg ->
                 latestJpeg = jpg
-                recorder?.addFrame(jpg)
+
+                if (recorder?.wantsJpegFrames() == true) {
+                    recorder?.addFrame(jpg, null)
+                }
+
                 decodeForPreview(jpg)
             },
             onStatus = { text ->
@@ -154,6 +186,30 @@ class MainActivity : Activity() {
 
         root.addView(controls, controlsParams)
 
+        val leftControls = LinearLayout(this)
+        leftControls.orientation = LinearLayout.VERTICAL
+        leftControls.gravity = Gravity.CENTER
+        leftControls.setPadding(dp(8), dp(8), dp(8), dp(8))
+        leftControls.setBackgroundColor(0x44000000)
+
+        setButton = Button(this)
+        setButton.text = "SET"
+        setButton.textSize = 16f
+        setButton.setOnClickListener {
+            showSettingsDialog()
+        }
+
+        leftControls.addView(setButton, buttonParams)
+
+        val leftParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        )
+        leftParams.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        leftParams.setMargins(dp(20), dp(8), dp(8), dp(8))
+
+        root.addView(leftControls, leftParams)
+
         setContentView(root)
     }
 
@@ -164,7 +220,11 @@ class MainActivity : Activity() {
             recButton.text = "REC"
             rec.stopAndSave()
         } else {
-            rec.start(latestJpeg)
+            rec.start(
+                firstJpeg = latestJpeg,
+                firstBitmap = latestBitmap,
+                videoFormat = settings.videoFormat
+            )
 
             if (rec.isRecording) {
                 recButton.text = "STOP"
@@ -175,15 +235,26 @@ class MainActivity : Activity() {
 
     private fun takeSnapshot() {
         val jpg = latestJpeg
+        val bitmap = latestBitmap
+        val format = settings.snapshotFormat
 
         if (jpg == null) {
             statusView.text = "No frame yet"
             return
         }
 
+        if (format == SnapshotFormat.PNG && bitmap == null) {
+            statusView.text = "No preview frame yet"
+            return
+        }
+
         thread(name = "SaveSnapshot") {
             try {
-                val name = MediaStoreSaver.saveSnapshot(this, jpg)
+                val name = if (format == SnapshotFormat.JPEG) {
+                    MediaStoreSaver.saveSnapshot(this, jpg)
+                } else {
+                    MediaStoreSaver.saveSnapshot(this, bitmap ?: return@thread, format)
+                }
 
                 runOnUiThread {
                     statusView.text = "Saved $name"
@@ -206,6 +277,12 @@ class MainActivity : Activity() {
                 val bmp = BitmapFactory.decodeByteArray(jpg, 0, jpg.size)
 
                 if (bmp != null) {
+                    latestBitmap = bmp
+
+                    if (recorder?.wantsJpegFrames() != true) {
+                        recorder?.addFrame(null, bmp)
+                    }
+
                     runOnUiThread {
                         imageView.setImageBitmap(bmp)
 
@@ -218,6 +295,156 @@ class MainActivity : Activity() {
                 decoding.set(false)
             }
         }
+    }
+
+    private fun showSettingsDialog() {
+        val content = LinearLayout(this)
+        content.orientation = LinearLayout.VERTICAL
+        content.setPadding(dp(20), dp(10), dp(20), 0)
+
+        val localPortInput = portInput(settings.localVideoPort)
+        val dronePortInput = portInput(settings.droneVideoPort)
+        val snapshotGroup = radioGroup(
+            listOf("JPEG" to SnapshotFormat.JPEG.name, "PNG" to SnapshotFormat.PNG.name),
+            settings.snapshotFormat.name
+        )
+        val videoGroup = radioGroup(
+            listOf("AVI" to VideoFormat.AVI.name, "MP4" to VideoFormat.MP4.name),
+            settings.videoFormat.name
+        )
+
+        content.addView(label("Local receive port"))
+        content.addView(localPortInput)
+        content.addView(label("Drone command port"))
+        content.addView(dronePortInput)
+        content.addView(label("Snapshots"))
+        content.addView(snapshotGroup)
+        content.addView(label("Videos"))
+        content.addView(videoGroup)
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Settings")
+            .setView(content)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val newLocalPort = parsePort(localPortInput.text.toString())
+                val newDronePort = parsePort(dronePortInput.text.toString())
+
+                if (newLocalPort == null || newDronePort == null) {
+                    statusView.text = "Ports must be 1-65535"
+                    return@setOnClickListener
+                }
+
+                val portsChanged = newLocalPort != settings.localVideoPort ||
+                    newDronePort != settings.droneVideoPort
+
+                settings.localVideoPort = newLocalPort
+                settings.droneVideoPort = newDronePort
+                settings.snapshotFormat = SnapshotFormat.valueOf(selectedTag(snapshotGroup))
+                settings.videoFormat = VideoFormat.valueOf(selectedTag(videoGroup))
+
+                if (portsChanged) {
+                    startReceiver()
+                } else {
+                    statusView.text = "Settings saved"
+                }
+
+                dialog.dismiss()
+            }
+        }
+
+        dialog.show()
+    }
+
+    private fun portInput(value: Int): EditText {
+        val input = EditText(this)
+
+        input.setText(value.toString())
+        input.inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        input.selectAll()
+
+        return input
+    }
+
+    private fun label(text: String): TextView {
+        val view = TextView(this)
+
+        view.text = text
+        view.setTextColor(Color.BLACK)
+        view.textSize = 14f
+        view.setPadding(0, dp(10), 0, 0)
+
+        return view
+    }
+
+    private fun radioGroup(options: List<Pair<String, String>>, selected: String): RadioGroup {
+        val group = RadioGroup(this)
+        group.orientation = RadioGroup.HORIZONTAL
+
+        for ((text, value) in options) {
+            val button = RadioButton(this)
+            button.text = text
+            button.tag = value
+            button.id = View.generateViewId()
+            group.addView(button)
+
+            if (value == selected) {
+                group.check(button.id)
+            }
+        }
+
+        return group
+    }
+
+    private fun selectedTag(group: RadioGroup): String {
+        val button = group.findViewById<RadioButton>(group.checkedRadioButtonId)
+
+        return button.tag.toString()
+    }
+
+    private fun parsePort(text: String): Int? {
+        val port = text.toIntOrNull() ?: return null
+
+        if (port < 1 || port > 65535) return null
+
+        return port
+    }
+
+    private fun detectDroneIp(): String {
+        try {
+            val cm = getSystemService(ConnectivityManager::class.java)
+
+            for (network: Network in cm.allNetworks) {
+                val caps = cm.getNetworkCapabilities(network) ?: continue
+
+                if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
+
+                val props = cm.getLinkProperties(network) ?: continue
+
+                for (route in props.routes) {
+                    val gateway = route.gateway
+
+                    if (route.isDefaultRoute && gateway is Inet4Address) {
+                        return gateway.hostAddress ?: fallbackDroneIp
+                    }
+                }
+
+                for (route in props.routes) {
+                    val gateway = route.gateway
+
+                    if (gateway is Inet4Address) {
+                        return gateway.hostAddress ?: fallbackDroneIp
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+
+        return fallbackDroneIp
     }
 
     private fun keepScreenOn() {

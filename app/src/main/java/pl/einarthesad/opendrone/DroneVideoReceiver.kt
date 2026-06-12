@@ -8,6 +8,7 @@ import java.net.SocketTimeoutException
 import kotlin.concurrent.thread
 
 class DroneVideoReceiver(
+    private val config: ConnectionConfig,
     private val onFrame: (ByteArray) -> Unit,
     private val onStatus: (String) -> Unit
 ) {
@@ -15,10 +16,6 @@ class DroneVideoReceiver(
     private var running = false
 
     private var socket: DatagramSocket? = null
-
-    private val droneIp = "192.168.4.153"
-    private val localVideoPort = 40238
-    private val droneVideoPort = 8080
 
     private val startVideo = byteArrayOf(0x42, 0x76)
     private val stopVideo = byteArrayOf(0x42, 0x77)
@@ -47,15 +44,15 @@ class DroneVideoReceiver(
         var parts = ArrayList<ByteArray>()
 
         try {
-            val droneAddress = InetAddress.getByName(droneIp)
+            val droneAddress = InetAddress.getByName(config.droneIp)
 
-            val s = DatagramSocket(localVideoPort)
+            val s = DatagramSocket(config.localVideoPort)
             socket = s
 
             s.soTimeout = 1000
             s.receiveBufferSize = 262144
 
-            onStatus("UDP ready")
+            onStatus("UDP ${config.droneIp}:${config.droneVideoPort} -> ${config.localVideoPort}")
 
             repeat(3) {
                 sendPacket(s, droneAddress, startVideo)
@@ -125,7 +122,7 @@ class DroneVideoReceiver(
     }
 
     private fun sendPacket(socket: DatagramSocket, address: InetAddress, data: ByteArray) {
-        val packet = DatagramPacket(data, data.size, address, droneVideoPort)
+        val packet = DatagramPacket(data, data.size, address, config.droneVideoPort)
         socket.send(packet)
     }
 
