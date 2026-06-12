@@ -1,9 +1,6 @@
 # Opendrone
 
-Small Android app for viewing a simple UDP MJPEG stream from a Wi-Fi drone.
-
-This is an early personal project, built in Kotlin without Android Studio-specific
-project files.
+Small Android app for viewing a simple UDP MJPEG stream from a cheap Temu drone.
 
 ## Build
 
@@ -20,14 +17,10 @@ Build the debug APK:
 ./gradlew :app:assembleDebug
 ```
 
-Install on a connected phone:
+Install on a connected phone (check `adb devices` first):
 
 ```sh
 ./gradlew :app:installDebug
 ```
 
-## Notes
-
-- The app currently targets Android SDK 34.
-- Drone connection details are still hardcoded in `DroneVideoReceiver.kt`.
-- Recording is saved as MJPEG AVI through Android MediaStore.
+This is an alternative to **com.tzh.wifi.wificam.activity**, which I find bloated and difficult to use.
